@@ -459,6 +459,41 @@ void main() {
       expect(off.names.contains('error'), isFalse);
     });
 
+    test('capture is allowed only with consent and while the game switch is on', () async {
+      final waiting = World(consent: 'opt_in');
+      waiting.start();
+      await settle();
+      expect(waiting.core.captureAllowed, isFalse, reason: 'before the yes');
+      expect(waiting.core.captureError(ErrorInfo(message: 'x', source: 'uncaught')), isFalse);
+      waiting.core.setTrackingEnabled(true);
+      expect(waiting.core.captureAllowed, isTrue);
+
+      final off = World();
+      off.sessionAnswer = {'token': 'tok', 'expiresIn': 3600, 'origin': origin, 'errorCapture': {'enabled': false, 'trail': false}};
+      final seen = <String>[];
+      off.start().on((name, _) => seen.add(name));
+      expect(off.core.captureAllowed, isTrue, reason: 'held until the answer');
+      await settle();
+      expect(off.core.captureAllowed, isFalse);
+      expect(seen, contains('error_capture'));
+    });
+
+    test('a huge error is cut before the dedupe key is built, and still capped at three', () async {
+      final w = World();
+      w.sessionAnswer = {'token': 'tok', 'expiresIn': 3600, 'origin': origin, 'errorCapture': {'enabled': true, 'trail': false}};
+      w.start();
+      await settle();
+      final huge = 'x1 ' * 400000;
+      for (var i = 0; i < 5; i++) {
+        w.core.captureError(ErrorInfo(message: huge, stack: 'frame\n' * 50000, source: 'uncaught'));
+      }
+      await w.flushAndSettle();
+      final errors = w.events.where((e) => e['event'] == 'error').toList();
+      expect(errors.length, 3);
+      expect((errors.first['data']['rs_message'] as String).length, lessThanOrEqualTo(200));
+      expect((errors.first['data']['rs_stack'] as String).length, lessThanOrEqualTo(2000));
+    });
+
     test('opt-out is saved, drops the queue, and the next launch sends nothing at all', () async {
       final w = World();
       w.start();

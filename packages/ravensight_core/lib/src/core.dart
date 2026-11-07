@@ -905,6 +905,7 @@ class RavensightCore {
   void _adoptErrorCapture(Object? value) {
     if (value is! Map) return;
     errorCapture = {'enabled': value['enabled'] != false, 'trail': value['trail'] == true};
+    _emit('error_capture', errorCapture!['enabled']);
     final held = List.of(_bootErrors);
     _bootErrors.clear();
     if (errorCapture!['enabled'] != true) return;
@@ -918,6 +919,11 @@ class RavensightCore {
     final data = buildErrorData(ErrorInfo(message: message, severity: severity, stack: stack, errorType: errorType, props: props), scrub: false);
     return track(name, data);
   }
+
+  /// True while automatic capture may run: a key, the player's consent, the
+  /// SDK's own switch, and the game's errorCapture switch not off. The
+  /// Flutter binding installs its hooks only while this holds.
+  bool get captureAllowed => config.captureErrors && config.ingestKey.isNotEmpty && trackingEnabled && !keyRefused && errorCapture?['enabled'] != false;
 
   /// An automatic capture: never without a key, consent or the game's
   /// capture switch; caps first; at most 5 held before the session answer.

@@ -116,7 +116,12 @@ class Ravensight {
           return AppExitResponse.exit;
         },
       );
-      if (captureErrors) _installErrorHooks();
+      // Hooks go in only while capture is allowed (a key, consent, the game's
+      // switch on), and come out when it stops being allowed.
+      core.on((name, _) {
+        if (name == 'error_capture' || name == 'tracking_disabled' || name == 'status_changed' || name == 'session_ready') _syncErrorHooks();
+      });
+      _syncErrorHooks();
       return isEnabled;
     } finally {
       _starting = false;
@@ -170,12 +175,29 @@ class Ravensight {
   /// Automatic capture: Flutter framework errors and uncaught errors from
   /// the platform dispatcher. Both chain to the handler that was there, so
   /// the app behaves exactly as before.
+  static FlutterExceptionHandler? _ourFlutterError;
+  static ErrorCallback? _ourPlatformError;
+
+  static void _syncErrorHooks() {
+    final allowed = _core?.captureAllowed ?? false;
+    if (allowed && !_hooksInstalled) _installErrorHooks();
+    if (!allowed && _hooksInstalled) _removeErrorHooks();
+  }
+
+  /// Restores the earlier handlers, unless the app has replaced ours since;
+  /// then ours stays in the chain and only stops capturing.
+  static void _removeErrorHooks() {
+    _hooksInstalled = false;
+    if (FlutterError.onError == _ourFlutterError) FlutterError.onError = _previousFlutterError;
+    if (PlatformDispatcher.instance.onError == _ourPlatformError) PlatformDispatcher.instance.onError = _previousPlatformError;
+  }
+
   static void _installErrorHooks() {
     if (_hooksInstalled) return;
     _hooksInstalled = true;
     _previousFlutterError = FlutterError.onError;
-    FlutterError.onError = (FlutterErrorDetails details) {
-      _captureThrown(details.exception, details.stack);
+    FlutterError.onError = _ourFlutterError = (FlutterErrorDetails details) {
+      if (_hooksInstalled) _captureThrown(details.exception, details.stack);
       final previous = _previousFlutterError;
       if (previous != null) {
         previous(details);
@@ -184,8 +206,8 @@ class Ravensight {
       }
     };
     _previousPlatformError = PlatformDispatcher.instance.onError;
-    PlatformDispatcher.instance.onError = (Object error, StackTrace stack) {
-      _captureThrown(error, stack);
+    PlatformDispatcher.instance.onError = _ourPlatformError = (Object error, StackTrace stack) {
+      if (_hooksInstalled) _captureThrown(error, stack);
       final previous = _previousPlatformError;
       return previous != null ? previous(error, stack) : false;
     };
@@ -197,7 +219,7 @@ class Ravensight {
     try {
       final stackText = stack?.toString();
       // Never the SDK's own errors.
-      if (stackText != null && stackText.contains('package:ravensight/')) return;
+      if (stackText != null && stackText.contains('package:ravensight')) return;
       core.captureError(ErrorInfo(
         message: error.toString(),
         stack: stackText,
@@ -299,7 +321,10 @@ class Ravensight {
 
   /// The player's choice, saved at once. False stops sending and drops the
   /// queue; with [RavensightConsent.optIn], true is the player's yes.
-  static void setTrackingEnabled(bool enabled) => _core?.setTrackingEnabled(enabled);
+  static void setTrackingEnabled(bool enabled) {
+    _core?.setTrackingEnabled(enabled);
+    _syncErrorHooks();
+  }
 
   /// True only while collecting.
   static bool get isEnabled => _core?.isTrackingEnabled ?? false;
@@ -334,11 +359,7 @@ class Ravensight {
   static void reset() {
     _timer?.cancel();
     _lifecycle?.dispose();
-    if (_hooksInstalled) {
-      FlutterError.onError = _previousFlutterError;
-      PlatformDispatcher.instance.onError = _previousPlatformError;
-    }
-    _hooksInstalled = false;
+    if (_hooksInstalled) _removeErrorHooks();
     _timer = null;
     _lifecycle = null;
     _core = null;

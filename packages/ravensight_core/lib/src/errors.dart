@@ -110,7 +110,10 @@ class ErrorLimiter {
       _refilledAt = t;
     }
     if (_tokens < 1) return false;
-    final key = '${info.errorType ?? ''}|${errorTemplate(info.message)}|${_firstFrame(info.stack)}';
+    // Cut to four times the limits before any template or frame work.
+    final stack = info.stack;
+    final key = '${cutText(info.errorType ?? '', typeChars)}|${errorTemplate(cutText(info.message, messageChars * 4))}|'
+        '${_firstFrame(stack == null ? null : cutText(stack, stackChars * 4))}';
     final seen = _perKey[key] ?? 0;
     if (seen >= perKeyCap) return false;
     _perKey[key] = seen + 1;
