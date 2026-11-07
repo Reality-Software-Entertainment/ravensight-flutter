@@ -1,0 +1,36 @@
+name: test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  core:
+    name: Pure core under dart test
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: packages/ravensight_core
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: stable
+      - run: dart pub get
+      - run: dart analyze
+      - run: dart test
+
+  flutter:
+    name: Flutter package, analyze and test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - run: flutter pub get
+      - run: flutter analyze
+      - run: flutter test
+      - name: The example analyzes
+        working-directory: example
+        run: flutter pub get && flutter analyze

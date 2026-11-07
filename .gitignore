@@ -1,0 +1,10 @@
+.dart_tool/
+.packages
+build/
+pubspec.lock
+.flutter-plugins
+.flutter-plugins-dependencies
+.DS_Store
+packages/ravensight_core/.dart_tool/
+example/.dart_tool/
+example/build/

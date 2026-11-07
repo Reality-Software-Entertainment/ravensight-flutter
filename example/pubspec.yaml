@@ -1,0 +1,13 @@
+name: ravensight_example
+description: A small Flutter game screen wired to Ravensight.
+publish_to: none
+version: 1.0.0
+
+environment:
+  sdk: ^3.5.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  ravensight:
+    path: ..
