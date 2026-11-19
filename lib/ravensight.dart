@@ -48,6 +48,9 @@ class Ravensight {
   // the SDK by an init with a key, never sent without one.
   static String? _heldAccountId;
   static String? _heldCampaignLink;
+  // A sign-out before init: the init with a key forgets an identity an
+  // earlier launch saved, before it can be sent.
+  static bool _resetIdentityAtInit = false;
 
   /// How long a quit waits for the last batch.
   static const Duration quitTimeout = Duration(milliseconds: 1500);
@@ -120,6 +123,10 @@ class Ravensight {
       _heldCampaignLink = null;
       if (heldLink != null) core.setCampaignLink(heldLink);
       core.start();
+      if (_resetIdentityAtInit) {
+        _resetIdentityAtInit = false;
+        resetIdentity();
+      }
       // An account the game identified before init, checked against the
       // saved one now that it is loaded.
       final heldAccount = _heldAccountId;
@@ -418,11 +425,15 @@ class Ravensight {
 
   /// For sign-out: forgets the account and switches to a fresh device id,
   /// as [resetDeviceId] does, so the next player is not linked to the last
-  /// one. Sends nothing. Does nothing when no account is set.
+  /// one. Sends nothing. Does nothing when no account is set. Called before
+  /// [init], it takes effect when an init with a key starts the SDK.
   static void resetIdentity() {
-    _heldAccountId = null;
     final core = _core;
-    if (core == null) return;
+    if (core == null) {
+      _heldAccountId = null;
+      _resetIdentityAtInit = true;
+      return;
+    }
     try {
       core.resetIdentity();
     } catch (err) {
@@ -475,5 +486,6 @@ class Ravensight {
     _core = null;
     _heldAccountId = null;
     _heldCampaignLink = null;
+    _resetIdentityAtInit = false;
   }
 }
