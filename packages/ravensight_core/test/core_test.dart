@@ -169,19 +169,19 @@ void main() {
     });
 
     test('ads: exactly the contract keys, revenue only on shown and only with a currency', () {
-      final ad = adEvent('admob', 'rewarded', 'shown', placement: 'level_end', revenueMicros: '1500', currency: 'USD');
+      final ad = adEvent('my_network', 'rewarded', 'shown', placement: 'level_end', revenueMicros: '1500', currency: 'USD');
       expect(ad.data, {
         'rs_kind': 'ad',
-        'rs_ad_network': 'admob',
+        'rs_ad_network': 'my_network',
         'rs_ad_format': 'rewarded',
         'rs_ad_placement': 'level_end',
         'rs_ad_result': 'shown',
         'rs_revenue_micros': '1500',
         'rs_currency': 'USD',
       });
-      expect(adEvent('admob', 'rewarded', 'shown', revenueMicros: '1500').data, isNull);
-      expect(adEvent('admob', 'rewarded', 'clicked', revenueMicros: '1', currency: 'USD').data, isNull);
-      expect(adEvent('admob', 'video', 'shown').data, isNull);
+      expect(adEvent('my_network', 'rewarded', 'shown', revenueMicros: '1500').data, isNull);
+      expect(adEvent('my_network', 'rewarded', 'clicked', revenueMicros: '1', currency: 'USD').data, isNull);
+      expect(adEvent('my_network', 'video', 'shown').data, isNull);
       expect(adFormatFrom('REWARDED_INTER'), 'rewarded');
       expect(adFormatFrom('MREC'), 'banner');
       expect(adFormatFrom('weird'), 'other');
@@ -208,7 +208,7 @@ void main() {
       expect(w.requests.first.url, 'https://api.test/api/v1/settings');
       final session = jsonDecode(utf8.decode(w.requests[1].body!)) as Map<String, dynamic>;
       expect(session['platform'], 'android');
-      expect(session['sdk'], 'flutter/0.1.0');
+      expect(session['sdk'], 'flutter/0.2.0');
       expect(session['device'], {'model': 'Pixel 7', 'osVersion': '14'});
       expect(RegExp(r'^[0-9a-f]{32}-android$').hasMatch(session['deviceId'] as String), isTrue);
       expect(w.names, ['game_started']);
