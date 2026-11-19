@@ -1,0 +1,6 @@
+# The pure Dart core takes no lint set of its own. Without this file the
+# analyzer would use the repository root's, whose Flutter lints are not
+# among the core's dependencies, so that include could not resolve here.
+# The analyzer's own errors and warnings still apply.
+linter:
+  rules: []

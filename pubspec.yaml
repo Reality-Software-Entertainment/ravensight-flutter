@@ -3,6 +3,9 @@ description: Ravensight player analytics for Flutter games. Sessions, events, re
 version: 0.1.0
 homepage: https://ravensight.io
 repository: https://github.com/Reality-Software-Entertainment/ravensight-flutter
+# Installed from the public git repository at a tag; never published to a
+# package registry.
+publish_to: none
 
 environment:
   sdk: ^3.5.0

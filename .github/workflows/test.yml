@@ -1,13 +1,55 @@
 name: test
 
+# Nightly on weekdays and on demand, never on a push or a pull request
+# (owner decision, November 19, 2026). Changes are checked locally first by
+# the pre-push hook in .githooks; this run is the safety net behind it, and
+# a night when main has not moved since a green run in the last 7 days costs one short job.
 on:
-  push:
-  pull_request:
+  schedule:
+    - cron: '31 6 * * 1-5'
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
+  quiet:
+    # A scheduled run on a main that passed in the last 7 days is skipped; a dispatch always runs.
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      actions: read
+    outputs:
+      run: ${{ steps.check.outputs.run }}
+    steps:
+      - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" != "schedule" ]; then echo "run=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          wf=$(basename "${GITHUB_WORKFLOW_REF%%@*}")
+          last=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$wf/runs?event=schedule&status=success&branch=main&per_page=1" --jq '.workflow_runs[0] // {} | "\(.head_sha // "") \(.run_started_at // "")"')
+          sha=${last%% *}
+          started=${last#* }
+          age_days=999
+          if [ -n "$started" ]; then age_days=$(( ($(date -u +%s) - $(date -u -d "$started" +%s)) / 86400 )); fi
+          # Dependencies and runner images change without a commit, so only a
+          # green run on this commit from the last 7 days lets a night be skipped.
+          if [ "$sha" = "$GITHUB_SHA" ] && [ "$age_days" -lt 7 ]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "main is unchanged since a green nightly $age_days days ago ($sha)." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
   core:
     name: Pure core under dart test
+    needs: quiet
+    if: needs.quiet.outputs.run == 'true'
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: packages/ravensight_core
@@ -22,13 +64,19 @@ jobs:
 
   flutter:
     name: Flutter package, analyze and test
+    needs: quiet
+    if: needs.quiet.outputs.run == 'true'
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
       - run: flutter pub get
+      - name: The core resolves on its own, so the analyzer can read its tests
+        working-directory: packages/ravensight_core
+        run: flutter pub get
       - run: flutter analyze
       - run: flutter test
       - name: The example analyzes
