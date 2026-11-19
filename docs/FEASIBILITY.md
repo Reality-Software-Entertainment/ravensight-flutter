@@ -31,11 +31,11 @@ Two packages in one repository:
 | Random bytes for the device id and nonce | `Random.secure()`. | Possible on every platform, the web included. |
 | Quit hook | `AppLifecycleListener.onExitRequested` on desktop; `AppLifecycleState.detached`. | Possible on desktop: `game_exited` and up to 1.5 seconds for the last batch before the app exits. Mobile apps are not told when they are killed; see the background rule. |
 | Background hook | `AppLifecycleState.paused` and `hidden`, `resumed`. | Possible: on iOS and Android the queue is saved, a flush starts and a marker is written; back after 30 minutes is `game_exited` at the time it left plus a new session, and a marker found at a cold start sends that `game_exited` under its own session's origin. |
-| Device fields | `Platform.operatingSystemVersion` is a free-form string, not the OS version alone; the device model needs a platform plugin. | Degraded: none are sent unless the game passes `device:` (for example from `device_info_plus`). The platform name is sent. |
+| Device fields | `Platform.operatingSystemVersion` is a free-form string, not the OS version alone; the device model needs a platform plugin. | Degraded: none are sent unless the game passes `device:` (for example from a device info plugin). The platform name is sent. |
 | Error capture | `FlutterError.onError`, `PlatformDispatcher.instance.onError`. | Possible: both chain to the handler that was there (the platform dispatcher returns the previous handler's answer, or false so the engine still reports the error). The SDK's own frames are never captured. No log hook, so no trail. No pending crash records: a Dart error does not end the process. |
 | Keeping the queue out of backups | iOS needs a resource value on the file; there is no Dart API for it. | Degraded: the queue in Application Support may be included in an iOS device backup. |
 | JSON that escapes correctly | `dart:convert`. | Possible. Event size is measured as the server measures it (the vectors). |
-| Packaging | pub.dev: `ravensight` depends on `ravensight_core`. | Possible. The path dependency becomes a version when both are published. |
+| Packaging | A git dependency on the public repository at a tag. `ravensight` depends on `ravensight_core` by a relative path, which pub resolves inside the same git checkout. | Possible. Nothing is published to a package registry: both pubspecs say `publish_to: none`. |
 
 ## Contract items degraded
 
@@ -53,5 +53,5 @@ Two packages in one repository:
 2. Run the example on Android, iOS, macOS, Windows and the web against a
    staging key: a session, a batch, a 429 `Retry-After`, offline then
    relaunch with the origin, opt-out, and the background rule.
-3. Publish `ravensight_core` before `ravensight`, and replace the path
-   dependency with its version.
+3. Tag the release on the public repository (the install snippet pins
+   `ref: v0.2.0`). Nothing is published to a package registry.

@@ -5,16 +5,31 @@ purchases, errors, ads and attribution, remote config and experiments,
 sent to [Ravensight](https://ravensight.io). Android, iOS, macOS, Windows,
 Linux and the web.
 
-Version 0.1.0. Not yet compiled or run: it was written where no Flutter or
-Dart SDK was installed, and its tests run first in CI. See
+Preview: not yet verified inside a Flutter app; tested with `dart test` and
+`flutter test` in CI.
+
+Version 0.1.0. It was written where no Flutter or Dart SDK was installed,
+so CI is where it is compiled and tested. See
 [docs/FEASIBILITY.md](docs/FEASIBILITY.md).
 
 ## Install
 
+Nothing is published to a package registry. Add the public repository as
+a git dependency, pinned to its tag:
+
 ```yaml
 dependencies:
-  ravensight: ^0.1.0
+  ravensight:
+    git:
+      url: https://github.com/Reality-Software-Entertainment/ravensight-flutter
+      ref: v0.2.0
 ```
+
+The SDK's pure Dart core, `packages/ravensight_core`, comes from the same
+repository and tag. `ravensight` depends on it by a relative path, and pub
+resolves a relative path inside a git dependency from that same checkout,
+so there is nothing else to add. From a local clone, use
+`path: ../ravensight-flutter` in place of `git:`.
 
 ## Use
 
@@ -118,9 +133,15 @@ says yes. `resetDeviceId()` starts over with a new id.
 ## Running the tests
 
 ```
-cd packages/ravensight_core && dart test
-flutter test
+cd packages/ravensight_core && dart pub get && dart analyze && dart test
+cd ../.. && flutter pub get && flutter analyze && flutter test
 ```
+
+Install the local checks once per clone: `git config core.hooksPath .githooks`. The pre-push hook then runs this repository's tests before every push, with a time limit, and refuses the push if they fail. CI runs nightly and on demand, not on pushes or pull requests, so this hook is where a change is checked first.
+
+The hook needs the Dart SDK for the core tests, and runs the package tests
+too when Flutter is on PATH. `sh .githooks/test-pre-push.sh` tests the
+hook's refuse paths.
 
 ## License
 
