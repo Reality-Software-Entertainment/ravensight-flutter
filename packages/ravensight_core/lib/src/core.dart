@@ -19,6 +19,11 @@
 //     1,024 bytes, HMAC signatures when the session gives a secret
 //   * the error queue rules: gameplay before captures, a capture never
 //     evicts gameplay, no trail on disk
+//   * identify: only a salted hash of the game's own account id, sent once
+//     per session as POST /api/v1/identify and saved beside the device id,
+//     never queued (docs/identify/CONTRACT.md)
+//   * a campaign link id, sent once as campaignLink on the next session
+//     the core opens, memory only
 
 import 'dart:async';
 import 'dart:convert';
@@ -134,7 +139,12 @@ const String attributionFile = 'attribution';
 const String backgroundFile = 'background.json';
 const String configFile = 'config.json';
 
+/// identify: `{"salt", "accountHash"}` as JSON, beside the device id
+/// (`ravensight_identity` in the browser's storage). Never the account id.
+const String identityFile = 'identity';
+
 final RegExp _deviceIdPattern = RegExp(r'^[0-9a-f]{32}-[a-z0-9]+$');
+final RegExp _hex64 = RegExp(r'^[0-9a-f]{64}$');
 final RegExp _experimentKey = RegExp(r'^[a-z][a-z0-9_]{0,63}$');
 final RegExp _variantName = RegExp(r'^[a-z][a-z0-9_-]{0,39}$');
 final RegExp _etag = RegExp(r'^"[a-f0-9]{64}"$');
@@ -204,6 +214,27 @@ class RavensightCore {
   bool quitting = false;
   final List<RsListener> _listeners = [];
   Completer<void>? _flushDone;
+
+  // identify: the saved {salt, accountHash}, or null; a valid account id
+  // waiting for the salt or the player's yes (memory only); the salt from
+  // this launch's session answers. The generation is bumped whenever the
+  // identity is replaced or forgotten, so a late answer changes nothing.
+  ({String salt, String accountHash})? _account;
+  String? _heldAccountId;
+  String? _identifySalt;
+  // An answer without a salt (an older server): off until the next launch.
+  bool _identifySaltMissing = false;
+  // A 404 or invalid_account_hash: not tried again this launch.
+  bool _identifyStopped = false;
+  // Two no_session answers in a row: stopped until resetIdentity.
+  bool _identifyNoSessionStopped = false;
+  bool _identifyNoSessionRetried = false;
+  String? _identifySentOn;
+  int _identifyGeneration = 0;
+
+  // The campaign link waiting for the next session this core opens
+  // (24 lowercase hex characters), or null. Memory only.
+  String? _campaignLink;
 
   // ------------------------------------------------------------- events
 
@@ -278,6 +309,9 @@ class RavensightCore {
       deviceId = _newDeviceId();
       deps.storage.write(deviceIdFile, deviceId);
     }
+    // The account an earlier launch saved, unless an id is already held
+    // (it replaces the saved one once hashed).
+    if (_account == null && _heldAccountId == null) _account = _readSavedAccount();
     _loadSavedQueue();
   }
 
@@ -367,11 +401,22 @@ class RavensightCore {
     final distribution = config.distribution;
     if (distribution != null && distribution.isNotEmpty) body['distribution'] = distribution;
     if (device.isNotEmpty) body['device'] = device;
+    // The player's own session only (this SDK has no playtest mode and no
+    // join token), until one answers with a token.
+    final campaignLink = _campaignLink;
+    if (campaignLink != null) body['campaignLink'] = campaignLink;
     _send(RsRequest('POST', '$apiUrl/api/v1/session', {'Content-Type': 'application/json', 'X-API-Key': config.ingestKey}, utf8.encode(jsonEncode(body))))
-        .then((res) => _onSessionResponse(res, generation));
+        .then((res) => _onSessionResponse(res, generation, campaignLink));
   }
 
-  void _onSessionResponse(RsResponse res, int generation) {
+  void _onSessionResponse(RsResponse res, int generation, String? campaignLink) {
+    // The campaign link this request carried opened a session, so it is
+    // never sent again, even when the answer is otherwise ignored below. A
+    // link set while the request was in flight waits for the next session.
+    if (campaignLink != null && campaignLink == _campaignLink && res.status == 201) {
+      final opened = _decode(res.body);
+      if (opened is Map && opened['token'] != null) _campaignLink = null;
+    }
     if (generation != _sessionGeneration) return;
     _sessionPending = false;
     final body = _decode(res.body);
@@ -383,10 +428,13 @@ class RavensightCore {
       _sessionExpiresAtMs = deps.wallMs() + (expiresIn is num && expiresIn > 0 ? expiresIn.toInt() : 86400) * 1000;
       _adoptSessionExtras(body);
       _adoptErrorCapture(body['errorCapture']);
+      _readIdentifySalt(body);
       _backoff = defaultRetrySeconds;
       _setReason(null);
       _emit('session_ready');
       _flushPending();
+      // Never awaited: identify does not hold back the session or an event.
+      _sendIdentify();
       fetchConfig();
     } else if (res.status == 201) {
       _setReason('session_failed');
@@ -957,8 +1005,11 @@ class RavensightCore {
   // -------------------------------------------------------------- privacy
 
   /// The player's choice, saved at once. Off drops the queue and the
-  /// pending error captures and sends nothing more.
+  /// pending error captures, forgets the signed-in account (identify) and
+  /// sends nothing more.
   void setTrackingEnabled(bool enabled) {
+    // Opting out, or withdrawing consent, forgets the signed-in account.
+    if (!enabled) _forgetIdentity();
     if (config.consent == 'opt_in') {
       if (enabled) {
         deps.storage.write(optInFile, '1');
@@ -988,6 +1039,8 @@ class RavensightCore {
     trackingEnabled = _serverTrackingEnabled;
     if (!_started) return;
     _loadIdentity();
+    // An account id held before the yes is hashed once the salt is known.
+    _hashHeldAccount();
     _setReason(null);
     if (!_settingsRequested) _checkServerSettings();
     _queueGameStarted();
@@ -997,8 +1050,13 @@ class RavensightCore {
   bool get isTrackingEnabled => trackingEnabled && !keyRefused;
 
   /// A fresh random device id. The queue, the session, the attribution
-  /// flag and any held captures are dropped.
+  /// flag and any held captures are dropped; a session answer still in
+  /// flight belongs to the old id and is ignored. Before the opt-in yes,
+  /// or after an opt-out, the old id is forgotten and none is made until
+  /// the player says yes (the result is then empty). The signed-in account
+  /// (identify) is kept. Without a key it does nothing.
   String resetDeviceId() {
+    if (config.ingestKey.isEmpty) return deviceId;
     _clearQueue();
     deps.storage.remove(attributionFile);
     deps.storage.remove(backgroundFile);
@@ -1007,14 +1065,226 @@ class RavensightCore {
     _sessionExpiresAtMs = 0;
     _signingSecret = null;
     _sessionOrigin = null;
+    _sessionGeneration += 1;
+    _sessionPending = false;
     _exposed.clear();
     _configDocument = null;
     _configScope = null;
+    // A flush waiting on the dropped queue or session is done.
+    _completeFlush();
+    if (_playerOptedOut) {
+      deps.storage.remove(deviceIdFile);
+      deviceId = '';
+      _identityLoaded = false;
+      return deviceId;
+    }
     deviceId = _newDeviceId();
     deps.storage.write(deviceIdFile, deviceId);
     _gameStartedQueued = false;
     _queueGameStarted();
     return deviceId;
+  }
+
+  // ------------------------------------------------------- campaign links
+
+  /// The campaign link waiting for the next session, or null.
+  String? get campaignLink => _campaignLink;
+
+  /// Holds a campaign link for the next session this core opens. True when
+  /// [linkId] is a link id (24 hex characters, in any case), which then
+  /// replaces any link waiting; false, with nothing changed, otherwise.
+  /// Memory only, and cleared only when a session that carried it answers
+  /// 201 with a token.
+  bool setCampaignLink(String linkId) {
+    final id = campaignLinkId(linkId);
+    if (id == null) return false;
+    _campaignLink = id;
+    return true;
+  }
+
+  // ------------------------------------------------------------- identify
+
+  /// True while an account is stored or held by [identify]. The account id
+  /// itself is never readable.
+  bool get isIdentified => _account != null || _heldAccountId != null;
+
+  /// Whether identify may hash and save now: a key, the player's consent,
+  /// and the device id loaded.
+  bool get _identityAllowed => _started && config.ingestKey.isNotEmpty && !_playerOptedOut && _identityLoaded;
+
+  /// Links this device to the game's own account. Returns null when
+  /// [accountId] is accepted, else why it is refused (`empty`, `too_long`
+  /// or `looks_like_email`); a refusal changes nothing. Only a salted hash
+  /// of the id is ever sent or saved; the id itself is held in memory until
+  /// the salt is known. A different account first does [resetIdentity].
+  String? identify(String accountId) {
+    final refusal = identifyRefusal(accountId);
+    if (refusal != null) return refusal;
+    // A different account than the one stored or held: a sign-out first.
+    if (!_isSameAccount(accountId)) resetIdentity();
+    if (_identifySaltMissing) {
+      _log('info', 'identify is not offered by this server; nothing is sent this launch');
+      return null;
+    }
+    final salt = _identifySalt;
+    if (salt == null || !_identityAllowed) {
+      // No salt this launch yet, or not allowed to save: held in memory
+      // only, and hashed under whichever salt the session answer brings.
+      _heldAccountId = accountId;
+      return null;
+    }
+    if (_account == null) {
+      _account = (salt: salt, accountHash: identifyAccountHash(salt, accountId));
+      _writeAccount();
+    }
+    _heldAccountId = null;
+    if (isSessionValid) {
+      _sendIdentify();
+    } else if (trackingEnabled && !keyRefused && !_sessionPending && !_settingsPending && _retryAt == null) {
+      // No session open: open one for the waiting identity.
+      _startSession();
+    }
+    return null;
+  }
+
+  /// For sign-out: forgets the stored or held account and switches to a
+  /// fresh device id as [resetDeviceId] does, so the next session is not
+  /// linked to the last player. Sends nothing. With no account stored or
+  /// held it does nothing and keeps the device id.
+  void resetIdentity() {
+    // An identity an earlier launch saved counts too, even before the
+    // opt-in yes, when it was never loaded.
+    final onDisk = config.ingestKey.isNotEmpty && deps.storage.read(identityFile) != null;
+    if (_account == null && _heldAccountId == null && !onDisk) return;
+    _forgetIdentity();
+    _identifyNoSessionStopped = false;
+    resetDeviceId();
+  }
+
+  /// True when [accountId] is the account already stored or held, or when
+  /// there is none.
+  bool _isSameAccount(String accountId) {
+    final held = _heldAccountId;
+    if (held != null) return held == accountId;
+    final account = _account;
+    if (account != null) return identifyAccountHash(account.salt, accountId) == account.accountHash;
+    return true;
+  }
+
+  void _forgetIdentity() {
+    _identifyGeneration += 1;
+    _identifySentOn = null;
+    _identifyNoSessionRetried = false;
+    _heldAccountId = null;
+    _account = null;
+    // Also one saved by an earlier launch and never loaded (before the
+    // opt-in yes). Never a file while inert.
+    if (config.ingestKey.isNotEmpty) deps.storage.remove(identityFile);
+  }
+
+  /// The saved identity when it is well formed, else null. Never writes.
+  ({String salt, String accountHash})? _readSavedAccount() {
+    final text = deps.storage.read(identityFile);
+    final doc = text == null ? null : _decode(text);
+    if (doc is! Map) return null;
+    final salt = doc['salt'];
+    final accountHash = doc['accountHash'];
+    if (salt is String && accountHash is String && _hex64.hasMatch(salt) && _hex64.hasMatch(accountHash)) {
+      return (salt: salt, accountHash: accountHash);
+    }
+    return null;
+  }
+
+  void _writeAccount() {
+    final account = _account;
+    if (account == null || !_identityAllowed) return;
+    try {
+      deps.storage.write(identityFile, jsonEncode({'salt': account.salt, 'accountHash': account.accountHash}));
+    } catch (err) {
+      // It still holds for this launch.
+      _log('warn', 'could not save the identity: $err');
+    }
+  }
+
+  /// Hashes a held account id once the salt is known and saving is allowed.
+  void _hashHeldAccount() {
+    final held = _heldAccountId;
+    final salt = _identifySalt;
+    if (held == null || salt == null || !_identityAllowed) return;
+    _account = (salt: salt, accountHash: identifyAccountHash(salt, held));
+    _heldAccountId = null;
+    _writeAccount();
+  }
+
+  /// Reads identify.salt from a session answer. The first answer decides
+  /// whether this server offers identify this launch; a salt other than the
+  /// saved one (another game's key) deletes the saved identity unsent.
+  void _readIdentifySalt(Map body) {
+    if (_identifySaltMissing) return;
+    final offer = body['identify'];
+    final salt = offer is Map ? offer['salt'] : null;
+    if (salt is! String || !_hex64.hasMatch(salt)) {
+      if (_identifySalt == null) {
+        _identifySaltMissing = true;
+        _heldAccountId = null;
+        _identifyGeneration += 1;
+      }
+      return;
+    }
+    _identifySalt = salt;
+    final account = _account;
+    if (account != null && account.salt != salt) {
+      final held = _heldAccountId;
+      _forgetIdentity();
+      _heldAccountId = held;
+    }
+    _hashHeldAccount();
+  }
+
+  /// Sends the identity on the open session, once per session. Never
+  /// queued, never awaited by a caller.
+  void _sendIdentify() {
+    final account = _account;
+    final salt = _identifySalt;
+    if (account == null || salt == null || account.salt != salt) return;
+    if (_identifyStopped || _identifyNoSessionStopped || !trackingEnabled || keyRefused || !isSessionValid) return;
+    final token = sessionToken;
+    if (_identifySentOn == token) return;
+    _identifySentOn = token;
+    final generation = _identifyGeneration;
+    final body = utf8.encode(jsonEncode({'accountHash': account.accountHash}));
+    _send(RsRequest('POST', '$apiUrl/api/v1/identify', {'Content-Type': 'application/json', 'X-API-Key': config.ingestKey, 'X-Session-Token': token}, body))
+        .then((res) => _onIdentifyResponse(res, generation));
+  }
+
+  void _onIdentifyResponse(RsResponse res, int generation) {
+    final error = _errorOf(_decode(res.body));
+    // The server does not offer identify, or calls the hash malformed (a
+    // bug): retrying this launch cannot help, whatever identity is current.
+    if (res.status == 404) {
+      _identifyStopped = true;
+      _log('info', 'identify is not offered by this server; not tried again this launch');
+      return;
+    }
+    if (res.status == 400 && error == 'invalid_account_hash') {
+      _identifyStopped = true;
+      _log('warn', 'identify was refused as invalid_account_hash; not tried again this launch');
+      return;
+    }
+    // A late answer for an identity since replaced or forgotten.
+    if (generation != _identifyGeneration) return;
+    if (res.status == 400 && error == 'no_session') {
+      // Again once, when the next session opens; a second no_session in a
+      // row stops identify until resetIdentity.
+      if (_identifyNoSessionRetried) _identifyNoSessionStopped = true;
+      _identifyNoSessionRetried = true;
+      return;
+    }
+    // 200, or 409 (session_taken, synthetic_session), 429 (identify_limited,
+    // rate_limited, needs_funds), 5xx, a timeout or offline: the identity is
+    // kept, this session is not tried again, and the next session tries once
+    // more.
+    _identifyNoSessionRetried = false;
   }
 
   // ------------------------------------------------------------- feedback

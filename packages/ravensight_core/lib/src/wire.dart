@@ -2,14 +2,15 @@
 // ids, event size as the server measures it, request signatures, micros and
 // the typed event helpers. No Flutter, no I/O.
 //
-// Contracts: DELIVERY_CONTRACT.md, ADS_ATTRIBUTION_CONTRACT.md and
-// docs/errors/CONTRACT.md on the Ravensight platform.
+// Contracts: DELIVERY_CONTRACT.md, ADS_ATTRIBUTION_CONTRACT.md,
+// docs/errors/CONTRACT.md and docs/identify/CONTRACT.md on the Ravensight
+// platform.
 
 import 'dart:convert';
 
 import 'package:crypto/crypto.dart';
 
-const String sdkVersion = '0.1.0';
+const String sdkVersion = '0.2.0';
 const String sdkName = 'flutter';
 const String defaultApiUrl = 'https://api.ravensight.io';
 
@@ -105,6 +106,33 @@ Map<String, Object?> signedBeaconBody(String sessionToken, String secret, int ti
       'sessionToken': sessionToken,
       'signed': {'v': 1, 't': timestamp, 'body': body, 'sig': signBody(secret, timestamp, body)},
     };
+
+// --- identify and campaign links --------------------------------------------
+
+/// The longest account id identify accepts, in bytes of UTF-8.
+const int identifyMaxBytes = 256;
+
+/// Why identify refuses [accountId], or null when it is accepted: `empty`,
+/// `too_long` (over 256 bytes of UTF-8, counted in bytes, not characters)
+/// or `looks_like_email` (any `@`). The id is used exactly as given, never
+/// trimmed, lower-cased or normalised (docs/identify/CONTRACT.md).
+String? identifyRefusal(String accountId) {
+  if (accountId.isEmpty) return 'empty';
+  if (utf8.encode(accountId).length > identifyMaxBytes) return 'too_long';
+  if (accountId.contains('@')) return 'looks_like_email';
+  return null;
+}
+
+/// `accountHash`: lowercase hex HMAC-SHA256 keyed with the UTF-8 bytes of
+/// the salt exactly as the session answer gives it (64 hex characters, not
+/// decoded), over the UTF-8 bytes of the account id.
+String identifyAccountHash(String salt, String accountId) => Hmac(sha256, utf8.encode(salt)).convert(utf8.encode(accountId)).toString();
+
+final RegExp _campaignLinkPattern = RegExp(r'^[0-9a-fA-F]{24}$');
+
+/// A campaign link id lowercased, as the session sends it, or null when
+/// [value] is not exactly 24 hex characters (any case, never trimmed).
+String? campaignLinkId(String value) => _campaignLinkPattern.hasMatch(value) ? value.toLowerCase() : null;
 
 /// `Retry-After` in whole seconds, or -1 when absent or not delta seconds.
 int retryAfterSeconds(String? value) {

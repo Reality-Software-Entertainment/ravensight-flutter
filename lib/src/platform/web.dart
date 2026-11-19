@@ -13,6 +13,18 @@ String osName() => 'web';
 bool isMobile() => false;
 List<int> Function(List<int>)? gzipEncoder() => null;
 
+/// The `rs_link` a campaign link's redirect added to the page address (the
+/// first one, as the browser SDK reads it), or null. Read once, at init;
+/// the address is left as it is.
+String? landingCampaignLink() {
+  try {
+    final values = Uri.base.queryParametersAll['rs_link'];
+    return values == null || values.isEmpty ? null : values.first;
+  } catch (_) {
+    return null;
+  }
+}
+
 /// One localStorage entry per file, named `ravensight_<file>`.
 class LocalStorage implements RsStorage {
   String _key(String name) => 'ravensight_$name';

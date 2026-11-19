@@ -22,6 +22,11 @@ bool isMobile() => Platform.isAndroid || Platform.isIOS;
 /// gzip, from dart:io.
 List<int> Function(List<int>)? gzipEncoder() => (bytes) => gzip.encode(bytes);
 
+/// No page address here: an app passes the `rs_link` of the address it was
+/// opened with to `Ravensight.setCampaignLink` from its own deep link
+/// handling.
+String? landingCampaignLink() => null;
+
 /// Files in `<application support>/ravensight`, written through a
 /// temporary file and a rename so a partial file never replaces a good one.
 class FileStorage implements RsStorage {

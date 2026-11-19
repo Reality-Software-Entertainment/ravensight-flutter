@@ -44,6 +44,11 @@ class Ravensight {
   static ErrorCallback? _previousPlatformError;
   static bool _hooksInstalled = false;
 
+  // Set before init (or while inert without a key): memory only, handed to
+  // the SDK by an init with a key, never sent without one.
+  static String? _heldAccountId;
+  static String? _heldCampaignLink;
+
   /// How long a quit waits for the last batch.
   static const Duration quitTimeout = Duration(milliseconds: 1500);
 
@@ -107,7 +112,19 @@ class Ravensight {
         ),
       );
       _core = core;
+      // A campaign link for the first session: on the web, the page
+      // address's rs_link, read once; a link the game set itself wins.
+      final pageLink = platform.landingCampaignLink();
+      if (pageLink != null) core.setCampaignLink(pageLink);
+      final heldLink = _heldCampaignLink;
+      _heldCampaignLink = null;
+      if (heldLink != null) core.setCampaignLink(heldLink);
       core.start();
+      // An account the game identified before init, checked against the
+      // saved one now that it is loaded.
+      final heldAccount = _heldAccountId;
+      _heldAccountId = null;
+      if (heldAccount != null) identify(heldAccount);
       _timer = Timer.periodic(const Duration(milliseconds: 500), (_) => core.tick());
       _lifecycle = AppLifecycleListener(
         onStateChange: _onLifecycle,
@@ -329,8 +346,13 @@ class Ravensight {
   /// True only while collecting.
   static bool get isEnabled => _core?.isTrackingEnabled ?? false;
 
-  /// A fresh random device id; the queue and the session are dropped.
-  static String? resetDeviceId() => _core?.resetDeviceId();
+  /// A fresh random device id; the queue and the session are dropped. The
+  /// signed-in account ([identify]) is kept. Null while inert, and before
+  /// the opt-in yes, when no new id is made until the player says yes.
+  static String? resetDeviceId() {
+    final id = _core?.resetDeviceId();
+    return id == null || id.isEmpty ? null : id;
+  }
 
   /// This install's random device id, or null before consent or without a key.
   static String? get deviceId {
@@ -349,6 +371,94 @@ class Ravensight {
   static Future<String?> submitFeedback(String message, {String? category, int? rating}) =>
       _core?.submitFeedback(message, category: category, rating: rating) ?? Future<String?>.value('disabled');
 
+  // ------------------------------------------------- identify, campaigns
+
+  /// Links this device to your game's own account once the player signs
+  /// in, so one person on two devices, or before and after sign-in, counts
+  /// as one player. Call [resetIdentity] when they sign out.
+  ///
+  /// Pass a random, high-entropy id: a random UUID, or a random analytics
+  /// id made once for each account and stored with it. Never a sequential
+  /// database key, an email, a name or a handle: the game's salt reaches
+  /// every client, so a guessable id could be matched. The hash is still a
+  /// pseudonymous identifier for the player, to declare in the game's
+  /// privacy notice.
+  ///
+  /// Only a salted hash of the id (`accountHash`, HMAC-SHA256 keyed with
+  /// the game's salt from the session answer) is sent, with the session
+  /// token, once per session, and saved beside the device id. The id itself
+  /// is never sent or saved; until the salt is known it is held in memory
+  /// only. A different account first does [resetIdentity]. It never enters
+  /// the event queue and never delays an event. Without a key, before init
+  /// or before an opt-in yes it is held in memory only.
+  ///
+  /// Returns true when the id is accepted. An id that is empty, over 256
+  /// bytes of UTF-8 or contains `@` returns false and prints one warning
+  /// with the reason (`empty`, `too_long` or `looks_like_email`); nothing
+  /// changes. The id is used exactly as given, never trimmed. Never throws.
+  static bool identify(String accountId) {
+    final refusal = identifyRefusal(accountId);
+    if (refusal != null) {
+      _log('warn', 'identify refused ($refusal): pass a random id of 1 to $identifyMaxBytes bytes with no @');
+      return false;
+    }
+    final core = _core;
+    if (core == null) {
+      _heldAccountId = accountId;
+      return true;
+    }
+    try {
+      core.identify(accountId);
+      return true;
+    } catch (err) {
+      _log('warn', 'identify failed: $err');
+      return false;
+    }
+  }
+
+  /// For sign-out: forgets the account and switches to a fresh device id,
+  /// as [resetDeviceId] does, so the next player is not linked to the last
+  /// one. Sends nothing. Does nothing when no account is set.
+  static void resetIdentity() {
+    _heldAccountId = null;
+    final core = _core;
+    if (core == null) return;
+    try {
+      core.resetIdentity();
+    } catch (err) {
+      _log('warn', 'resetIdentity failed: $err');
+    }
+  }
+
+  /// True while an account is set by [identify]. The id is never readable.
+  static bool get isIdentified => _core?.isIdentified ?? (_heldAccountId != null);
+
+  /// Sends a Ravensight campaign link with the next session the SDK opens,
+  /// so the player is counted on the Campaign links page. On the web the
+  /// SDK reads `rs_link` from the page address itself, at [init]. On
+  /// Android, iOS and desktop, call this from your own deep link handling
+  /// with the `rs_link` value of the address the game was opened with;
+  /// before [init] if you can, else it goes with the next session.
+  ///
+  /// Returns true when [linkId] is a link id (24 hex characters, in any
+  /// case), which then replaces any link waiting. Anything else returns
+  /// false and prints one warning naming `invalid_link`; nothing changes.
+  /// Memory only, sent once (a failed attempt keeps it for the next), and
+  /// only when a session may open: a key and the player's consent.
+  static bool setCampaignLink(String linkId) {
+    final id = campaignLinkId(linkId);
+    if (id == null) {
+      _log('warn', 'campaign link not used (invalid_link): a link id is 24 hex characters');
+      return false;
+    }
+    final core = _core;
+    if (core == null) {
+      _heldCampaignLink = id;
+      return true;
+    }
+    return core.setCampaignLink(id);
+  }
+
   /// Subscribe to the SDK's events: session_ready, session_failed,
   /// status_changed, tracking_disabled, events_flushed, flush_failed,
   /// event_tracked, config_ready, feedback_submitted, feedback_failed.
@@ -363,5 +473,7 @@ class Ravensight {
     _timer = null;
     _lifecycle = null;
     _core = null;
+    _heldAccountId = null;
+    _heldCampaignLink = null;
   }
 }
