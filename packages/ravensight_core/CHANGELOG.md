@@ -1,6 +1,32 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 - 2026-11-19
+
+Identify needs a Ravensight server with `POST /identify` and `identify.salt`
+on the session answer; until then identify sends nothing.
+
+### Added
+
+- `RavensightCore.identify(accountId)` (null when accepted, else `empty`,
+  `too_long` or `looks_like_email`), `resetIdentity()` and `isIdentified`,
+  with the pure helpers `identifyRefusal` and `identifyAccountHash`
+  (HMAC-SHA256 from `package:crypto`). The hash and its salt are saved as
+  `identity` beside the device id and sent once per session as
+  `POST /api/v1/identify`, never through the event queue. Tested against
+  the identify vectors, version 2.
+- `RavensightCore.setCampaignLink(linkId)`, `campaignLink` and the pure
+  `campaignLinkId`: the link goes lowercased as `campaignLink` on the next
+  session request and is cleared only by a session answer with a token.
+
+### Changed
+
+- Nightly and on-demand CI, the pre-push hook and the preview README, as in
+  the `ravensight` package.
+- `resetDeviceId()` ignores a session answer still in flight for the old
+  id, and before the opt-in yes it forgets the old id without making a new
+  one. Without a key it does nothing.
+
+## 0.1.0 - 2026-11-06
 
 ### Added
 

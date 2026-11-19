@@ -48,7 +48,7 @@ class _GameScreenState extends State<GameScreen> {
   void _rewardedAdPaid(double revenue) {
     // A mediation callback's double, as micros, without a float multiply.
     final micros = microsFromRevenue(revenue);
-    if (micros != null) Ravensight.trackAdRevenue('admob', 'rewarded', 'level_end', micros, 'USD');
+    if (micros != null) Ravensight.trackAdRevenue('my_network', 'rewarded', 'level_end', micros, 'USD');
   }
 
   @override

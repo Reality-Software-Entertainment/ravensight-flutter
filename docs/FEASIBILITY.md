@@ -1,6 +1,7 @@
 # Flutter: feasibility against the SDK contract
 
-Checked on 2026-11-06 against the Dart and Flutter API references
+Checked on 2026-11-06, with identify and campaign links added on
+2026-11-19, against the Dart and Flutter API references
 (`dart:io` `HttpClient`, `gzip` and `File`, `package:path_provider`,
 `package:crypto`, `package:http`, `package:web`, `AppLifecycleListener`,
 `FlutterError.onError`, `PlatformDispatcher.onError`). Neither Flutter nor
@@ -35,6 +36,8 @@ Two packages in one repository:
 | Error capture | `FlutterError.onError`, `PlatformDispatcher.instance.onError`. | Possible: both chain to the handler that was there (the platform dispatcher returns the previous handler's answer, or false so the engine still reports the error). The SDK's own frames are never captured. No log hook, so no trail. No pending crash records: a Dart error does not end the process. |
 | Keeping the queue out of backups | iOS needs a resource value on the file; there is no Dart API for it. | Degraded: the queue in Application Support may be included in an iOS device backup. |
 | JSON that escapes correctly | `dart:convert`. | Possible. Event size is measured as the server measures it (the vectors). |
+| Identify (salted account hash) | `package:crypto` `Hmac(sha256, utf8.encode(salt))` over `utf8.encode(accountId)`; UTF-8 byte length from `utf8.encode`; the hash saved through the same storage as the device id. | Possible; the identify vectors (version 2) are in the core tests. `accountId` is a `String`, so the contract's `not_text` and whole number cases cannot occur: the compiler refuses them. |
+| Campaign links | `Uri.base` is the page address on the web; Android, iOS and desktop apps get the address they were opened with from their own deep link handling. | Possible: the web reads `rs_link` once at init through the platform layer; other platforms pass it to `setCampaignLink`. |
 | Packaging | A git dependency on the public repository at a tag. `ravensight` depends on `ravensight_core` by a relative path, which pub resolves inside the same git checkout. | Possible. Nothing is published to a package registry: both pubspecs say `publish_to: none`. |
 
 ## Contract items degraded
@@ -45,6 +48,9 @@ Two packages in one repository:
 4. On iOS the saved queue is not excluded from device backups.
 5. On the web, `Retry-After` needs the API to expose the header to scripts.
 6. A mobile app killed in the foreground sends no `game_exited`.
+
+This SDK has no playtest mode, so the identify and campaign link rules for
+a playtest run (memory only, nothing sent) have nothing to act on.
 
 ## Before release
 
