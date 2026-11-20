@@ -916,7 +916,7 @@ class RavensightCore {
     final values = doc?['values'];
     if (values is! Map || !values.containsKey(key)) return fallback;
     final value = values[key];
-    if (value is T) return value as T;
+    if (value is T) return value;
     if (fallback is double && value is int) return value.toDouble() as T;
     return fallback;
   }
