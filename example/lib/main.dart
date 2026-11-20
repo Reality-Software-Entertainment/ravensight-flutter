@@ -1,7 +1,7 @@
 // A one-screen example: start Ravensight, track a level, read a remote
 // config value, report an ad's revenue and give the player an analytics
 // switch.
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:ravensight/ravensight.dart';
 
 Future<void> main() async {

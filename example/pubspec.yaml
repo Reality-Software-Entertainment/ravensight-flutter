@@ -9,6 +9,9 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  # Flutter's own Material library is deprecated (after 3.47) in favour of
+  # this package; the example's app bar, buttons and switch come from it.
+  material_ui: ^1.0.0
   ravensight:
     path: ..
 
